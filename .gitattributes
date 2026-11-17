@@ -1,0 +1,6 @@
+# Fuerza saltos de linea LF: los scripts .sh/.py fallan en Linux si llegan con CRLF (Windows).
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.hpp text eol=lf
+*.cpp text eol=lf

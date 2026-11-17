@@ -1,0 +1,8 @@
+build/
+__pycache__/
+*.pyc
+.venv/
+data/
+# Los resultados se pueden regenerar; si quieres versionarlos, quita esta linea:
+results/*
+!results/.gitkeep
