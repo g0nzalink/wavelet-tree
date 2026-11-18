@@ -2,11 +2,6 @@
 # Instala SDSL-lite (solo la biblioteca) en un prefijo local, sin sudo.
 #   bash scripts/install_sdsl.sh              -> instala en ~/.local
 #   bash scripts/install_sdsl.sh /otra/ruta   -> instala en /otra/ruta
-#
-# Requisitos (Arch): sudo pacman -S --needed base-devel cmake git
-#
-# Por que no se usa el install.sh del repo de SDSL: es de 2017, pide CMake 2.8 (CMake >= 4
-# lo rechaza) y ademas compila y instala los tests de googletest, que fallan al instalar.
 set -euo pipefail
 
 PREFIX="${1:-$HOME/.local}"
@@ -20,10 +15,16 @@ echo ">> Configurando"
 cmake -S "$WORK/sdsl-lite" -B "$WORK/build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  -DCMAKE_INSTALL_PREFIX="$PREFIX"
+  -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+  -DCMAKE_CXX_FLAGS="-include cstdint -w -Wno-template-body" \
+  -DCMAKE_C_FLAGS="-w"
 
 echo ">> Compilando (solo las bibliotecas)"
-cmake --build "$WORK/build" --target sdsl divsufsort divsufsort64 -j"$(nproc)"
+if ! cmake --build "$WORK/build" --target sdsl divsufsort divsufsort64 -j"$(nproc)" >/dev/null 2>&1; then
+  echo ">> Fallo la compilacion. Repitiendo en serie para mostrar el error real:"
+  cmake --build "$WORK/build" --target sdsl divsufsort divsufsort64 -j1 2>&1 | grep -E -B3 -A12 "error" | head -80
+  exit 1
+fi
 
 echo ">> Copiando a $PREFIX"
 mkdir -p "$PREFIX/include" "$PREFIX/lib"
