@@ -8,6 +8,7 @@ Solo Linux.
 src/wavelet_tree.hpp      tu implementación (sin tocar)
 src/bench.cpp             un proceso = una configuración; imprime una fila CSV
 scripts/install_sdsl.sh   instala SDSL-lite en ~/.local (sin sudo)
+scripts/download_pizzachili.sh baja los archivos del corpus Pizza&Chili a data/pizzachili/
 scripts/run_benchmarks.py recorre la grilla de configuraciones -> results/results.csv
 scripts/plot_results.py   results.csv -> gráficas + summary.csv
 CMakeLists.txt
@@ -59,6 +60,25 @@ python3 scripts/plot_results.py
   Usa un **prefijo** (10–50 MB): la implementación propia usa ~4 bytes por bit de cada nivel
   (n=1e7 con σ=256 ya son ~320 MB). Ambas implementaciones miden el mismo prefijo.
 - `results/environment.txt` guarda CPU, caché, RAM, kernel, compilador y gobernador: inclúyelo en el informe.
+
+## 3b. Datos reales: Pizza & Chili
+
+```bash
+bash scripts/download_pizzachili.sh                 # dna, proteins, english, sources, dblp.xml (prefijos de 50 MB)
+python3 scripts/run_benchmarks.py --pin 2 --pizza   # mide solo esos archivos (20 MB de cada uno)
+python3 scripts/plot_results.py
+```
+
+- `--pizza` omite la grilla sintética y mide los archivos de `data/pizzachili/`. Con `--prefix-mb N` cambias cuántos MB de cada
+  archivo se usan (por defecto 20). Los resultados se **agregan** al mismo `results.csv` (corridas distintas no se pisan).
+- Para solo DNA: `bash scripts/download_pizzachili.sh dna` y luego `--files data/pizzachili/dna:50000000`.
+- Prefijos más grandes: `SIZE=100 bash scripts/download_pizzachili.sh dna` (el corpus publica prefijos de 50, 100 y 200 MB).
+- `results/datasets.txt` guarda, por archivo, los bytes usados y el sha256 del prefijo (reproducibilidad).
+- Alfabetos con el prefijo de 50 MB: dna 16, proteins 25, dblp.xml 96, english 176, sources 227. Cubren casi todo el rango de σ de la parte sintética.
+- Memoria de la implementación propia: unos `4 · ⌈log₂σ⌉` bytes por carácter (dna ≈ 16 B/car, english y sources ≈ 32 B/car),
+  más el pico de la construcción. Con 20 MB de english son ~640 MB de estructura. Si te quedas sin RAM, baja `--prefix-mb`.
+- Gráficas nuevas: `07_real_<archivo>.png` (latencia, patrones, bpc, construcción, memoria y caché por archivo) y
+  `08_real_resumen.png` (razón propio/SDSL entre archivos, ordenados por σ).
 
 ## 4. Qué mide cada columna
 

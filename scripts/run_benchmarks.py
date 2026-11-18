@@ -11,6 +11,7 @@ Ejemplos:
 """
 import argparse
 import csv
+import hashlib
 import itertools
 import os
 import shutil
@@ -20,6 +21,8 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QUERY_OPS = ("access", "rank", "select")
+# Archivos del corpus Pizza&Chili que baja scripts/download_pizzachili.sh (en data/pizzachili/)
+PIZZA = ["dna", "proteins", "english", "sources", "dblp.xml"]
 
 
 def sh(cmd):
@@ -59,6 +62,28 @@ def write_environment(path):
     print("[info] datos del equipo guardados en", path)
 
 
+def describe_datasets(specs, path):
+    """Guarda en results/datasets.txt que archivos reales (y cuantos bytes) se midieron + su sha256."""
+    with open(path, "w") as f:
+        f.write("archivo\tbytes_usados\tsha256_del_prefijo\n")
+        for spec in specs:
+            p, _, pre = spec.partition(":")
+            if not os.path.exists(p):
+                sys.exit(f"No existe el archivo {p}. Para Pizza&Chili: bash scripts/download_pizzachili.sh")
+            size = os.path.getsize(p)
+            use = min(int(pre), size) if pre else size
+            h, left = hashlib.sha256(), use
+            with open(p, "rb") as fh:
+                while left > 0:
+                    chunk = fh.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    left -= len(chunk)
+            f.write(f"{os.path.basename(p)}\t{use}\t{h.hexdigest()}\n")
+    print("[info] datasets reales registrados en", path)
+
+
 def make_key(impl, op, pattern, source, dist, n, sigma):
     return "|".join(map(str, (impl, op, pattern, source, dist, n, sigma)))
 
@@ -78,6 +103,11 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--files", nargs="*", default=[],
                     help="archivos reales, formato ruta[:bytes_de_prefijo] (ej. data/dna:20000000)")
+    ap.add_argument("--pizza", action="store_true",
+                    help="medir SOLO los archivos de data/pizzachili/ (omite los sinteticos)")
+    ap.add_argument("--pizza-dir", default=os.path.join(ROOT, "data", "pizzachili"))
+    ap.add_argument("--prefix-mb", type=float, default=20,
+                    help="MB de cada archivo real que se usan con --pizza (default 20)")
     ap.add_argument("--pin", type=int, default=None, help="fijar el proceso a este nucleo (taskset)")
     ap.add_argument("--timeout", type=int, default=3600, help="segundos maximos por configuracion")
     ap.add_argument("--quick", action="store_true", help="grilla pequena para probar que todo funciona")
@@ -86,6 +116,15 @@ def main():
 
     if args.quick:
         args.sizes, args.queries, args.reps = [100_000, 1_000_000], 200_000, 3
+
+    synthetic = True
+    if args.pizza:
+        synthetic = False
+        found = [os.path.join(args.pizza_dir, f) for f in PIZZA if os.path.exists(os.path.join(args.pizza_dir, f))]
+        if not found:
+            sys.exit(f"No hay archivos en {args.pizza_dir}. Ejecuta: bash scripts/download_pizzachili.sh")
+        pre = int(args.prefix_mb * 1_000_000)
+        args.files += [f"{p}:{pre}" for p in found]
 
     if not os.path.exists(args.bench):
         sys.exit(f"No existe {args.bench}. Compila primero: cmake -S . -B build && cmake --build build -j")
@@ -105,7 +144,9 @@ def main():
 
     # ---- armar la lista de configuraciones
     jobs = []  # (key, argv_extra)
-    datasets = [("synthetic", dist, n, sigma) for dist in args.dists for n in args.sizes for sigma in args.sigmas]
+    datasets = []
+    if synthetic:
+        datasets = [("synthetic", dist, n, sigma) for dist in args.dists for n in args.sizes for sigma in args.sigmas]
     for spec in args.files:
         path, _, pre = spec.partition(":")
         datasets.append((path, "-", int(pre) if pre else 0, 0))
@@ -127,6 +168,8 @@ def main():
             if key not in done:
                 jobs.append((key, extra))
 
+    if args.files:
+        describe_datasets(args.files, os.path.join(os.path.dirname(args.out), "datasets.txt"))
     print(f"[info] {len(jobs)} configuraciones por ejecutar ({len(done)} ya hechas)")
     prefix = []
     if args.pin is not None:

@@ -159,29 +159,119 @@ def fig_cache(q, out):
     save(fig, out, "06_contadores_de_hardware.png")
 
 
+NAN = float("nan")
+
+
+def val(d, impl, col, op, pat=None):
+    """Valor medio de una columna para (impl, op[, patron]); NaN si no existe o si no hay contadores (-1)."""
+    m = (d.impl == impl) & (d.op == op)
+    if pat is not None:
+        m &= d.pattern == pat
+    s = d.loc[m, col]
+    v = float(s.mean()) if len(s) else NAN
+    return NAN if v < 0 else v
+
+
+def ratio(a, b):
+    """a/b, o NaN si alguno no es válido (evita dividir por 0 cuando el delta de memoria es 0)."""
+    return a / b if (b == b and a == a and b > 0) else NAN
+
+
+def bars2(ax, cats, f, ylabel, title, log=False, labels=None, fs=9):
+    """Barras agrupadas propio vs SDSL. f(impl, cat) -> valor."""
+    w = 0.38
+    for k, impl in enumerate(("mine", "sdsl")):
+        ax.bar([i + (k - .5) * w for i in range(len(cats))], [f(impl, c) for c in cats], w,
+               color=COLORS[impl], label=LABELS[impl])
+    ax.set_xticks(range(len(cats)))
+    ax.set_xticklabels(labels or cats, fontsize=fs)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title, fontsize=10)
+    ax.grid(alpha=.3, axis="y", which="both")
+    if log:
+        ax.set_yscale("log")
+
+
 def fig_real(df, out):
+    """Un panel por archivo real: latencia, patrones, bpc, construcción, memoria y caché."""
     real = df[df.source != "synthetic"]
     for src in real.source.unique():
         d = real[real.source == src]
-        q = d[d.op.isin(OPS) & (d.pattern == "uniform")]
-        if q.empty:
-            continue
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-        w = 0.38
-        for k, impl in enumerate(("mine", "sdsl")):
-            vals = [q[(q.impl == impl) & (q.op == op)].ns_median.mean() for op in OPS]
-            axes[0].bar([i + (k - .5) * w for i in range(3)], vals, w, color=COLORS[impl], label=LABELS[impl])
-        axes[0].set_xticks(range(3))
-        axes[0].set_xticklabels(OPS)
-        axes[0].set_yscale("log")
-        axes[0].set_ylabel("ns por consulta")
-        axes[0].legend(fontsize=8)
-        bp = d.groupby("impl").bpc.first()
-        axes[1].bar([LABELS[i] for i in bp.index], bp.values, color=[COLORS[i] for i in bp.index])
-        axes[1].set_ylabel("bits por carácter")
-        s, n = int(d.sigma.iloc[0]), int(d.n.iloc[0])
-        fig.suptitle(f"{src}  (n={human_n(n)}, sigma={s})")
+        n, sg = int(d.n.iloc[0]), int(d.sigma.iloc[0])
+        fig, ax = plt.subplots(2, 3, figsize=(15, 8.2))
+
+        bars2(ax[0][0], OPS, lambda i, o: val(d, i, "ns_median", o, "uniform"),
+              "ns por consulta", "Latencia (patrón uniforme)", log=True)
+        ax[0][0].legend(fontsize=8)
+
+        cp = [(o, p) for o in OPS for p in ("uniform", "sequential", "hotspot")]
+        bars2(ax[0][1], cp, lambda i, c: val(d, i, "ns_median", c[0], c[1]),
+              "ns por consulta", "Latencia por patrón de acceso", log=True,
+              labels=[f"{o}\n{p[:4]}" for o, p in cp], fs=7)
+
+        bars2(ax[0][2], ["bpc"], lambda i, c: val(d, i, "bpc", "build"), "bits por carácter",
+              "Espacio de la estructura", log=True, labels=[""])
+        ax[0][2].axhline(math.ceil(math.log2(max(sg, 2))), color="k", ls="--", lw=1, label="ceil(log2 σ)")
+        ax[0][2].axhline(8, color="gray", ls=":", lw=1, label="texto plano (8 bpc)")
+        ax[0][2].legend(fontsize=8)
+
+        bars2(ax[1][0], [""], lambda i, c: val(d, i, "build_s", "build"), "segundos",
+              "Tiempo de construcción", labels=[""])
+        bars2(ax[1][1], [""], lambda i, c: val(d, i, "rss_delta_kb", "build") / 1024, "MB",
+              "Pico de memoria sobre el texto (construcción)", labels=[""])
+
+        cc = [(o, c) for o in OPS for c in ("l1d_miss_q", "ll_miss_q")]
+        bars2(ax[1][2], cc, lambda i, c: val(d, i, c[1], c[0], "uniform"), "fallos por consulta",
+              "Fallos de caché (uniforme)", labels=[f"{o}\n{'L1D' if c.startswith('l1d') else 'LL'}" for o, c in cc], fs=7)
+        if all(math.isnan(val(d, i, c[1], c[0], "uniform")) for i in ("mine", "sdsl") for c in cc):
+            ax[1][2].text(.5, .5, "sin contadores\nde hardware", ha="center", va="center",
+                          transform=ax[1][2].transAxes, color="gray")
+
+        fig.suptitle(f"{src}   (n={human_n(n)}, σ={sg})")
         save(fig, out, f"07_real_{os.path.splitext(src)[0]}.png")
+
+
+def fig_real_summary(df, out):
+    """Comparación entre archivos reales (ordenados por σ): razón propio/SDSL."""
+    real = df[df.source != "synthetic"]
+    srcs = sorted(real.source.unique(), key=lambda s_: real[real.source == s_].sigma.iloc[0])
+    if len(srcs) < 2:
+        return
+    labels = [f"{s_}\nσ={int(real[real.source == s_].sigma.iloc[0])}" for s_ in srcs]
+    D = {s_: real[real.source == s_] for s_ in srcs}
+    x = range(len(srcs))
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4))
+
+    w = 0.27
+    for k, op in enumerate(OPS):
+        r = [ratio(val(D[s_], "mine", "ns_median", op, "uniform"), val(D[s_], "sdsl", "ns_median", op, "uniform"))
+             for s_ in srcs]
+        ax[0].bar([i + (k - 1) * w for i in x], r, w, label=op)
+    ax[0].axhline(1, color="k", lw=1)
+    ax[0].set_yscale("log")
+    ax[0].set_title("Latencia: propio / SDSL  (>1 = SDSL más rápido)", fontsize=10)
+    ax[0].legend(fontsize=8)
+
+    bars2(ax[1], srcs, lambda i, s_: val(D[s_], i, "bpc", "build"), "bits por carácter",
+          "Espacio (bpc)", log=True, labels=labels, fs=8)
+    ax[1].legend(fontsize=8)
+
+    ax[2].bar([i - w / 2 for i in x], [ratio(val(D[s_], "mine", "build_s", "build"), val(D[s_], "sdsl", "build_s", "build"))
+                                       for s_ in srcs], w, label="tiempo de construcción")
+    ax[2].bar([i + w / 2 for i in x], [ratio(val(D[s_], "mine", "rss_delta_kb", "build"),
+                                             val(D[s_], "sdsl", "rss_delta_kb", "build")) for s_ in srcs], w,
+              label="pico de memoria")
+    ax[2].axhline(1, color="k", lw=1)
+    ax[2].set_yscale("log")
+    ax[2].set_title("Construcción: propio / SDSL  (>1 = SDSL mejor)", fontsize=10)
+    ax[2].legend(fontsize=8)
+
+    for a_ in (ax[0], ax[2]):
+        a_.set_xticks(list(x))
+        a_.set_xticklabels(labels, fontsize=8)
+        a_.grid(alpha=.3, axis="y", which="both")
+    fig.suptitle("Pizza&Chili: resumen entre archivos")
+    save(fig, out, "08_real_resumen.png")
 
 
 def summary(df, out_dir):
@@ -221,6 +311,7 @@ def main():
         fig_build(b, args.out)
         fig_rss(b, args.out)
     fig_real(df, args.out)
+    fig_real_summary(df, args.out)
     summary(df, os.path.dirname(args.out))
 
 
